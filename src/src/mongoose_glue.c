@@ -5,13 +5,39 @@
 // Default mock implementation of the API callbacks
 
 #include "mongoose_glue.h"
-static struct sensor_settings s_sensor_settings = {42, 42, 42};
+#include "hc_sr04.h"
+#include "hx711.h"
+
+// Sensor Settings: HC-SR04 calibration and thresholds
+// distance_trig: glass detection threshold in mm (default 80mm = 8cm)
+// linear: HX711 multiplier for weight calibration (calibrated for 1kg load cell)
+//   Calibration: 550g reference → multiplier = (550*1000) / 372421 = 1477
+// offset: HX711 zero-point offset (raw value at 0g load)
+static struct sensor_settings s_sensor_settings = {
+  .distance_trig = 80,     // 80mm (8cm) - glass detected when closer
+  .linear = 1477,          // HX711 calibration multiplier (550g reference, Δraw=372421)
+  .offset = -467384        // HX711 zero-point offset (raw value at 0g load)
+};
+
 void glue_get_sensor_settings(struct sensor_settings *data) {
-  *data = s_sensor_settings;  // Sync with your device
+  *data = s_sensor_settings;  // Return current sensor settings
 }
+
 void glue_set_sensor_settings(struct sensor_settings *data) {
-  s_sensor_settings = *data; // Sync with your device
+  // Validate settings before applying
+  if (data->distance_trig > 0 && data->distance_trig <= 400) {
+    s_sensor_settings.distance_trig = data->distance_trig;
+  }
+  if (data->linear > 0) {
+    s_sensor_settings.linear = data->linear;
+  }
+  // offset can be negative or positive
+  s_sensor_settings.offset = data->offset;
+  
+  // In production: persist settings to NVS/flash
+  // nvs_set_sensor_settings(&s_sensor_settings);
 }
+
 
 static struct settings s_settings = {0, "192.168.1.134"};
 void glue_get_settings(struct settings *data) {
@@ -21,10 +47,51 @@ void glue_set_settings(struct settings *data) {
   s_settings = *data; // Sync with your device
 }
 
-static struct sensor_read s_sensor_read = {false, false, 100, 20};
+// Sensor read values: real-time sensor readings
+// These values are updated live when the API is called
+static struct sensor_read s_sensor_read = {
+  .cup_true = false,    // Glass detection state (calculated from HC-SR04)
+  .tare = false,        // Tare state (from HX711 weight sensor)
+  .weight = 0,          // Current weight in grams (from HX711)
+  .distance = 0         // Current distance in mm (from HC-SR04)
+};
+
 void glue_get_sensor_read(struct sensor_read *data) {
-  *data = s_sensor_read;  // Sync with your device
+  // Read HC-SR04 ultrasonic sensor (glass detection)
+  if (hc_sr04_is_initialized()) {
+    int32_t distance = hc_sr04_read_distance();
+    data->distance = (int) distance;
+    
+    // Cup detection: compare distance with threshold (distance_trig in mm)
+    // If distance < threshold, cup is present
+    if (distance < s_sensor_settings.distance_trig) {
+      data->cup_true = true;
+    } else {
+      data->cup_true = false;
+    }
+  } else {
+    data->distance = 0;
+    data->cup_true = false;
+  }
+  
+  // Read HX711 weight sensor
+  if (hx711_is_initialized()) {
+    // Read weight with calibration: offset and multiplier from sensor_settings
+    data->weight = hx711_read_weight(s_sensor_settings.offset, s_sensor_settings.linear);
+  } else {
+    data->weight = 0;
+  }
+  
+  // Tare flag is read-only (status flag)
+  data->tare = s_sensor_read.tare;
 }
+
 void glue_set_sensor_read(struct sensor_read *data) {
-  s_sensor_read = *data; // Sync with your device
+  // Handle tare operation when tare flag is set
+  if (data->tare && hx711_is_initialized()) {
+    hx711_tare();
+    s_sensor_read.tare = true;
+  } else {
+    s_sensor_read.tare = false;
+  }
 }

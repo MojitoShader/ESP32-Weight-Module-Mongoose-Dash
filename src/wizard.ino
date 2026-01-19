@@ -1,5 +1,7 @@
 #include <SPI.h>
 #include "src/mongoose_glue.h"
+#include "src/hc_sr04.h"
+#include "src/hx711.h"
 #include <Arduino.h>
 
 #define SS_PIN 14            // Slave select pin
@@ -28,6 +30,14 @@ void setup() {
   pinMode(SS_PIN, OUTPUT);
   pinMode(RST_PIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
+
+  // Initialize HC-SR04 ultrasonic sensor
+  // Pinout from FSD: GPIO37 TRIG, GPIO38 ECHO
+  hc_sr04_init(37, 38);
+
+  // Initialize HX711 weight cell amplifier
+  // Pinout from FSD: GPIO35 DT (DOUT), GPIO36 SCK
+  hx711_init(35, 36);
 
   // Reset W5500
   digitalWrite(RST_PIN, LOW);
